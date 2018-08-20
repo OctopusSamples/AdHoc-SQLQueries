@@ -1,0 +1,30 @@
+{
+  "Id": "ActionTemplates-162",
+  "Name": "Get SQL Scripts For Review",
+  "Description": "This will go through the package and pull out all the files found so they can be reviewed.  It will perform some basic analysis of the scripts to ensure certain key-words aren't used.  It will also require a transaction be used for each script.  It will set an output variable, \"ManualInterventionRequired\" based on the analysis to determine if a manual intervention is required.",
+  "ActionType": "Octopus.Script",
+  "Version": 10,
+  "CommunityActionTemplateId": null,
+  "Properties": {
+    "Octopus.Action.Script.ScriptSource": "Inline",
+    "Octopus.Action.Script.Syntax": "PowerShell",
+    "Octopus.Action.Script.ScriptBody": "# Check if PowerShell-Yaml is installed.\nWrite-Host \"Checking to see if powershell-yaml is installed\"\n$powershellModule = Get-Module -Name powershell-yaml\t\nif ($powershellModule -eq $null) { \t\n\tWrite-Host \"Powershell-yaml is not installed, installing now\"\n    install-module powershell-yaml -force\n}\n\nWrite-Host \"Importing powershell-yaml\"\nimport-module powershell-yaml\n\n# Get the NuGet package installation directory path.\n$downloadPackageStep = $OctopusParameters[\"ScriptPackageReview.PackageStep.Id\"]\nif ([string]::IsNullOrWhiteSpace($downloadPackageStep)) { throw \"You must enter a value for 'Download Package Step'.\" }\n$packagePath = $OctopusParameters[\"Octopus.Action[$downloadPackageStep].Output.Package.InstallationDirectoryPath\"]\nWrite-Host \"Package Path: $packagePath\"\nif($packagePath -eq $null) {\n    throw \"The 'Download Package Step' is not a 'Deploy a NuGet package' step: '$downloadPackageStep'\"\n}\n\n$metaDataFile = \"$packagePath\\MetaData.yaml\" \nWrite-Host \"Checking to see if the $metaDataFile file exists\"\nif ((Test-Path $metaDataFile) -ne $true)\n{\n\tthrow \"MetaData.yaml file not found.\"\n}\n\nNew-OctopusArtifact $metaDataFile\n\nWrite-Host \"Reading the contents of $metaDataFile\"\n[string[]]$fileContent = Get-Content $metaDataFile\n\n$content = ''\nforeach ($line in $fileContent) { $content = $content + \"`n\" + $line }\n\nWrite-Host \"$content\"\n$yaml = ConvertFrom-YAML $content\n\n$destinationDatabase = $yaml.DatabaseName\n$destinationServer = $yaml.Server\n$submittedBy = $yaml.SubmittedBy\n\nWrite-Host \"Database Name: $destinationDatabase\"\nSet-OctopusVariable -name \"DestinationDatabase\" -value $destinationDatabase\n\nWrite-Host \"Server: $destinationServer\"\nSet-OctopusVariable -name \"DestinationServer\" -value $destinationServer\n\nWrite-Host \"Submitted By: $submittedBy\"\nSet-OctopusVariable -name \"SubmittedBy\" -value $submittedBy\n\nWrite-Host \"Getting all the script files in the directory $packagePath\"\n$fileTypesToInclude=@(\"*.sql\")\n$filesToProcess = Get-ChildItem -Path $packagePath -Include $fileTypesToInclude -Recurse\n$manualInterventionRequired = $false\n\nforeach ($file in $filesToProcess)\n{\n\tWrite-Host \"Adding the file $file as an artifact\"\n    New-OctopusArtifact $file\n    \n    $sqlScriptContent = Get-Content $file\n    $sqlScriptContent = $sqlScriptContent.ToLower()\n    \n    if ($sqlScriptContent -match \"\\b(drop)\\b\"){\n    \t$manualInterventionRequired = $true\n    }\n    \n    if ($sqlScriptContent -match \"\\b(delete)\\b\"){\n    \t$manualInterventionRequired = $true\n    }\n    \n    if (($sqlScriptContent -match \"\\b(transaction)\\b\") -eq $false){\n    \t$manualInterventionRequired = $true\n    }\n}\n\nWrite-Host \"Manual Intervention Required: $manualInterventionRequired\"\nSet-OctopusVariable -name \"ManualInterventionRequired\" -value $manualInterventionRequired"
+  },
+  "Parameters": [
+    {
+      "Id": "2f6ed534-acf6-48f5-bda0-e3d7e96971ad",
+      "Name": "ScriptPackageReview.PackageStep.Id",
+      "Label": "Download Package Step",
+      "HelpText": "The step in the process which downloads the package onto the server",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "StepName"
+      }
+    }
+  ],
+  "$Meta": {
+    "ExportedAt": "2018-08-20T19:02:08.737Z",
+    "OctopusVersion": "2018.7.11",
+    "Type": "ActionTemplate"
+  }
+}

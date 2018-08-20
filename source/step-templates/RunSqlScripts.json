@@ -1,0 +1,70 @@
+{
+  "Id": "ActionTemplates-163",
+  "Name": "Run SQL Scripts",
+  "Description": "This step will run all the SQL Scripts found in the package downloaded via a previous step.  Please note: Get SQL Scripts Review can be used to read the package and set output variables for you to use for this step.",
+  "ActionType": "Octopus.Script",
+  "Version": 1,
+  "CommunityActionTemplateId": null,
+  "Properties": {
+    "Octopus.Action.Script.ScriptSource": "Inline",
+    "Octopus.Action.Script.Syntax": "PowerShell",
+    "Octopus.Action.Script.ScriptBody": "# Get the NuGet package installation directory path.\n$downloadPackageStep = $OctopusParameters[\"ScriptPackageRun.PackageStep.Id\"]\nif ([string]::IsNullOrWhiteSpace($downloadPackageStep)) { throw \"You must enter a value for 'Download Package Step'.\" }\n$packagePath = $OctopusParameters[\"Octopus.Action[$downloadPackageStep].Output.Package.InstallationDirectoryPath\"]\nWrite-Host \"Package Path: $packagePath\"\nif($packagePath -eq $null) {\n    throw \"The 'Download Package Step' is not a 'Deploy a NuGet package' step: '$downloadPackageStep'\"\n}\n\n$databaseName = $OctopusParameters[\"ScriptPackageRun.Database.Name\"]\n$databaseServer = $OctopusParameters[\"ScriptPackageRun.Database.Server\"]\n$databaseUserName = $OctopusParameters[\"ScriptPackageRun.Database.UserName\"]\n$databasePassword = $OctopusParameters[\"ScriptPackageRun.Database.Password\"]\n\nWrite-Host \"Running the scripts on the server $databaseServer in the database $databaseName with the Username $databaseUserName\"\n\n$filesToProcess = Get-ChildItem -Path $packagePath -Include *.sql -Recurse\n\nforeach ($file in $filesToProcess)\n{\n    Write-Host \"Running the script $file\"\n\n    if ([string]::IsNullOrWhiteSpace($databaseUserName) -eq $true){\n\t    Write-Host \"No username found, using integrated security\"\n        Invoke-Sqlcmd -Database $databaseName -ServerInstance $databaseServer -InputFile $file        \n    }\n    else {\n\t    Write-Host \"Username found, using SQL Authentication\"        \n        Invoke-Sqlcmd -Database $databaseName -ServerInstance $databaseServer -Username $databaseUserName -Password $databasePassword -InputFile $file\n    }\n}"
+  },
+  "Parameters": [
+    {
+      "Id": "6af037ae-68bb-49f3-859f-0de7ade0bf56",
+      "Name": "ScriptPackageRun.PackageStep.Id",
+      "Label": "Download Package Step",
+      "HelpText": "The step in the process which downloads the package onto the server.",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "StepName"
+      }
+    },
+    {
+      "Id": "b04c5ee4-428b-4cd1-b83b-2df9a2b511f5",
+      "Name": "ScriptPackageRun.Database.Server",
+      "Label": "Database Server",
+      "HelpText": "The server to run the scripts on",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "SingleLineText"
+      }
+    },
+    {
+      "Id": "31e8053b-d38d-42fd-aeef-7b421f1462a9",
+      "Name": "ScriptPackageRun.Database.Name",
+      "Label": "Database Name",
+      "HelpText": "The name of the database to run the scripts on",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "SingleLineText"
+      }
+    },
+    {
+      "Id": "b8517c54-10d5-4009-bcbc-3070381868b5",
+      "Name": "ScriptPackageRun.Database.Username",
+      "Label": "Database User Name",
+      "HelpText": "The username for the user who has permissions to run the script.  Leave blank for integrated security.",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "SingleLineText"
+      }
+    },
+    {
+      "Id": "2b59bf01-c6ae-41aa-9d8b-3cb3e2c3b475",
+      "Name": "ScriptPackageRun.Database.Password",
+      "Label": "Database User Password",
+      "HelpText": "The password for the user who has permissions to run the scripts.",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "Sensitive"
+      }
+    }
+  ],
+  "$Meta": {
+    "ExportedAt": "2018-08-20T19:05:16.166Z",
+    "OctopusVersion": "2018.7.11",
+    "Type": "ActionTemplate"
+  }
+}

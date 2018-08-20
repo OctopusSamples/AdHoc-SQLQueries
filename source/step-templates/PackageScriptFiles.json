@@ -1,0 +1,90 @@
+{
+  "Id": "ActionTemplates-164",
+  "Name": "Package Script Files",
+  "Description": "This step will run on a server and it will monitor a hot folder.  The hot folder will is expected to have two subdirectories:\n\n- $hotfolder\\Pending\n- $hotfolder\\Processed\n\nAny folder located inside of the $hotfolder\\Pending (example $hotfolder\\Pending\\TestDeployment) will be zipped up and sent to Octopus Deploy to be processed.  You are expected to have MetaData.yaml file located in directory you wish to zip up.  The MetaData.yaml file should have, at a minimum, the following:\n\n---\nEnvironment: Test\nSubmittedBy: Bob.Walker@octopus.com\n...\n\nWhen used in conjunction with the steps such as Get Scripts For Review and Run SQL Scripts you can build a pipeline that can run ad hoc scripts.\n",
+  "ActionType": "Octopus.Script",
+  "Version": 1,
+  "CommunityActionTemplateId": null,
+  "Properties": {
+    "Octopus.Action.Script.ScriptSource": "Inline",
+    "Octopus.Action.Script.Syntax": "PowerShell",
+    "Octopus.Action.Script.ScriptBody": "# Check if PowerShell-Yaml is installed.\nWrite-Host \"Checking to see if powershell-yaml is installed\"\n$powershellModule = Get-Module -Name powershell-yaml\t\nif ($powershellModule -eq $null) { \t\n\tWrite-Host \"Powershell-yaml is not installed, installing now\"\n    install-module powershell-yaml -force\n}\n\nWrite-Host \"Importing powershell-yaml\"\nimport-module powershell-yaml\n\n$OctopusServer = $OctopusParameters[\"BuildScriptPackage.Octopus.Server\"]\n$OctopusProject = $OctopusParameters[\"BuildScriptPackage.Octopus.Project\"]\n$FolderToMonitor = $OctopusParameters[\"BuildScriptPackage.Tentacle.FolderToMonitor\"]\n$OctopusAPIKey = $OctopusParameters[\"BuildScriptPackage.Octopus.ApiKey\"]\n$VersionPrefix = $OctopusParameters[\"BuildScriptPackage.Octopus.VersionPrefix\"]\n$OctoExeLocation = $OctopusParameters[\"BuildScriptPackage.Tentacle.OctoExeLocation\"]\n$PackageName = $OctopusParameters[\"BuildScriptPackage.Octopus.PackageName\"]\n\nWrite-Host \"Octopus Server: $OctopusServer\"\nWrite-Host \"Octopus Project: $OctopusProject\"\nWrite-Host \"Folder To Monitor: $FolderToMonitor\"\nWrite-Host \"OctoExeFolder: $OctoExeLocation\"\nWrite-Host \"Version Prefix: $versionPrefix\"\n\n$octoExe = \"$octoExeLocation\\Octo.exe\"\n\n$header = New-Object \"System.Collections.Generic.Dictionary[[String],[String]]\"\n$header.Add(\"X-Octopus-ApiKey\", $OctopusAPIKey)\n\n$projectToQuery = $OctopusProject.Replace(\" \", \"-\")\n$projectUrl = \"$OctopusServer/api/projects/$projectToQuery\"\nWrite-Host \"Querying to get project details: $projectUrl\"\n\n$response = Invoke-RestMethod $projectUrl -Headers $header \nWrite-Host \"ProjectResponse: $response\"\n\n$projectId = $response.Id\nWrite-Host \"ProjectId: $projectId\"\n\n#Set the build number to zero in case no build is found\n$buildNumber = 0\n$skipCount = 0\n$totalResults = 100\n\nwhile ($skipCount -lt $totalResults -and $buildNumber -eq 0)\n{\n    $releaseUrl = \"$OctopusServer/api/projects/$projectId/releases?skip=$skipCount\"\n    Write-Host \"Querying to get release details: $releaseUrl\"\n\n    $response = Invoke-RestMethod $releaseUrl -Headers $header\n    $releaseList = $response.Items\n    $releaseCount = $releaseList.Count\n    $totalResults = $response.TotalResults\n    $skipCount = $skipCount + $releaseList.Count\n\n    Write-Host \"Found $releaseCount releases in current response, with a total result of $totalResults, looping through to find build number\"\n\n    foreach ($release in $releaseList)\n    {\n        $currentVersion = $release.Version\n        Write-Host \"Comparing $versionPrefix with $currentVersion\"\n\n        if ($currentVersion.StartsWith($versionPrefix))\n        {\n            Write-Host \"The release version $currentVersion starts with $versionPrefix, pulling the build number\"\n            $versionSuffix = $currentVersion.Substring($versionPrefix.Length)\n\n            # Remove all the non digit items from the suffix\n            $buildNumber = $versionSuffix -replace '[^0-9]',''\n            $buildNumber = [int]::Parse($buildNumber)\n            Write-Host \"Found the build number $buildNumber to use\"\n            break\n        }\n    }\n}\n\n$pendingFolder = \"$FolderToMonitor\\Pending\"\n$processedFolder = \"$FolderToMonitor\\Processed\"\n$directoriesToProcess = Get-ChildItem -Path $pendingFolder -Directory\n\nforeach ($directory in $directoriesToProcess) {\n    Write-Host \"Processing the directory: $pendingFolder\\$directory\"\n\n    $metaDataYamlFile = \"$pendingFolder\\$directory\\MetaData.yaml\"\n    if ((Test-Path $metaDataYamlFile) -eq $false) {\n        Throw \"The MetaData.yaml file $metaDataYamlFile was not found\"\n    }\n\n    Write-Host \"Reading the contents of $metaDataYamlFile\"\n    [string[]]$fileContent = Get-Content $metaDataYamlFile\n\n    $content = ''\n    foreach ($line in $fileContent) { $content = $content + \"`n\" + $line }\n\n    Write-Host \"$content\"\n    $yaml = ConvertFrom-YAML $content\n\n    $environment = $yaml.Environment\n    Write-Host \"Deployment Environment: $environment\"\n        \n    $directoryNameForVersion = $directory.ToString().Replace(\" \", \"\")\n    Write-Host \"Directory Name For release: $directoryNameForVersion\"\n\n    Write-Host \"Adding one to the build number $buildNumber\"\n    $buildNumber = $buildNumber + 1\n    Write-Host \"New build number is $buildNumber\"\n\n    $versionToUse = \"$VersionPrefix.$buildNumber\"\n    Write-Host \"The version for this directory will be: $versionToUse\"\n\n    $releaseName = \"$versionToUse-$directoryNameForVersion\"\n    Write-Host \"The release name for this directory will be: $releaseName\"\n\n    Write-Host \"Packaging the folder $pendingFolder\\$directory\"\n    & $octoExe pack --id=$PackageName --version=$versionToUse --format=\"ZIP\" --basePath=\"$pendingFolder\\$directory\" --outFolder=\"$processedFolder\"\n\n    Write-Host \"Pushing the package $processedFolder\\$versionToUse.zip to $OctopusServer\"\n    & $octoExe push --Package=\"$processedFolder\\$PackageName.$versionToUse.zip\" --server=\"$OctopusServer\" --apiKey=\"$OctopusAPIKey\" --replace-existing\n\n    Write-Host \"Creating The Release\"\n    & $octoExe create-release --project $OctopusProject --packageVersion=\"$versionToUse\" --version=\"$releaseName\" --deployTo=\"$environment\" --Server=\"$OctopusServer\" --apiKey=\"$OctopusAPIKey\"\n\n    $currentTimeStamp = Get-Date\n    $currentTimeStamp = $currentTimeStamp.ToString(\"yyyyMMdd_HHmmss\")\n    $processedFolderToUse = \"$processedFolder\\$currentTimeStamp$directory\"\n    Write-Host \"Finished processing $pendingFolder\\$directory moving to $processedFolderToUse\"\n    Move-Item -Path \"$pendingFolder\\$directory\" -Destination \"$processedFolderToUse\"\n} "
+  },
+  "Parameters": [
+    {
+      "Id": "d2bac75e-d6c8-461f-a375-1a77a318499f",
+      "Name": "BuildScriptPackage.Octopus.Server",
+      "Label": "Octopus Server",
+      "HelpText": "The Octopus Server where the release will be created on",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "SingleLineText"
+      }
+    },
+    {
+      "Id": "e1d62394-a186-4145-8f30-45c8bc81347b",
+      "Name": "BuildScriptPackage.Octopus.ApiKey",
+      "Label": "Octopus Api Key",
+      "HelpText": "The API Key to interact with the Octopus Server",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "Sensitive"
+      }
+    },
+    {
+      "Id": "bb41c035-eddb-4eed-b5b8-90525c3006d6",
+      "Name": "BuildScriptPackage.Octopus.Project",
+      "Label": "Octopus Project",
+      "HelpText": "The Octopus Project which will have the release created for it.",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "SingleLineText"
+      }
+    },
+    {
+      "Id": "6332104b-a29c-4215-b34d-f14e0330d7dd",
+      "Name": "BuildScriptPackage.Octopus.VersionPrefix",
+      "Label": "Version Prefix",
+      "HelpText": "The version prefix which will be used to create releases.  Ex: 1.0.0 or 2018.8",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "SingleLineText"
+      }
+    },
+    {
+      "Id": "ee800756-28d7-488f-84f7-9a9648b94e0e",
+      "Name": "BuildScriptPackage.Octopus.PackageName",
+      "Label": "Package Name",
+      "HelpText": "The name of the package which will be created.  Ex: DatabaseDeployments",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "SingleLineText"
+      }
+    },
+    {
+      "Id": "0dfa6c35-7831-4001-b4f0-22b4d43409ae",
+      "Name": "BuildScriptPackage.Tentacle.FolderToMonitor",
+      "Label": "Folder To Monitor",
+      "HelpText": "The folder which will be monitored.  The folder will is expected to have two subdirectories:\n\n- $hotfolder\\Pending\n- $hotfolder\\Processed\n\nAny folder located inside of the $hotfolder\\Pending (example $hotfolder\\Pending\\TestDeployment) will be zipped up and sent to Octopus Deploy to be processed.  You are expected to have MetaData.yaml file located in directory you wish to zip up.  The MetaData.yaml file should have, at a minimum, the following:\n\n---\nEnvironment: Test\nSubmittedBy: Bob.Walker@octopus.com\n...\n\nWhen used in conjunction with the steps such as Get Scripts For Review and Run SQL Scripts you can build a pipeline that can run ad hoc scripts.",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "SingleLineText"
+      }
+    },
+    {
+      "Id": "3b693f76-d4dc-4ea0-8927-f395df9a21c1",
+      "Name": "BuildScriptPackage.Tentacle.OctoExeLocation",
+      "Label": "Octo.Exe Folder",
+      "HelpText": "The location on the machine where Octo.exe is installed.",
+      "DefaultValue": "",
+      "DisplaySettings": {
+        "Octopus.ControlType": "SingleLineText"
+      }
+    }
+  ],
+  "$Meta": {
+    "ExportedAt": "2018-08-20T19:04:38.156Z",
+    "OctopusVersion": "2018.7.11",
+    "Type": "ActionTemplate"
+  }
+}
